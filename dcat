@@ -1,0 +1,239 @@
+#!/usr/bin/env ruby
+$VERBOSE = nil
+%w{ fileutils json zlib tempfile shellwords }.each{|l| require l}
+
+class DCat
+  SIZE_UNITS = %w{ B K M G T }
+  SPINNERS = (1..10).map{|l| '.'*l }
+  
+  def help_text
+    <<-TXT.gsub(/^ */, '')
+      DCat / disk catalog USAGE
+      ----------------------------------------
+      * create:  dcat <i|index>  name   path
+      * search:  dcat <s|search> [name] regexp
+      * browse:  dcat [name]
+      * list  :  dcat ls
+      ----------------------------------------
+      required tools: find, sort, pv, dialog
+      data folder: #{@db_dir}
+    TXT
+  end # help_text
+  
+  def initialize(args)
+    STDOUT.sync = true # needed for the moving spinner
+    
+    # create data folder
+    @db_dir = File.expand_path ENV['DCAT_DB_DIR'] || "#{ENV['HOME']}/.local/share/dcat"
+    FileUtils.mkdir_p @db_dir
+    
+    @args = args
+    
+    # https://stackoverflow.com/questions/263890/how-do-i-find-the-width-height-of-a-terminal-window
+    @term_w, @term_h = `tput cols`.to_i, `tput lines`.to_i
+  end #initialize
+  
+  def run
+    die help_text if @args.include? '-h'
+    return show_dbs if @args[0] == 'ls'
+    return create name: @args[1], path: @args[2] if %w{ i index  }.include?(@args[0])
+    return search name: @args[1], re:   @args[2] if %w{ s search }.include?(@args[0])
+    return browse name: @args[0]
+  end # run
+  
+  def show_dbs
+    stats = dbs_stats
+    pad_size = stats.keys.map(&:size).max
+    stats.each{|n, p| puts "#{n.rjust pad_size} 🖴  #{p[:size]}  ☆ #{p[:ctime]}" }
+  end # show_dbs
+  
+  def browse(name:)
+    stats = dbs_stats
+    
+    if name.nil?
+      begin
+        tmp_file  = Tempfile.open 'dialog.dcat.', '/tmp'
+        d_options = stats.map{|name, p| [name.shellescape, %Q|"🖴 #{p[:size]}  ☆ #{p[:ctime]}"|] }.flatten.join ' '
+        system %Q| dialog --menu Select\\ catalog 17 40 15 #{d_options} 2> #{tmp_file.path} |
+        print "\e[H\e[2J" # clear terminal
+        name = tmp_file.read.strip
+      ensure
+        tmp_file.close!  # close and unlink temp file
+      end
+    end
+
+    exit if name == ''
+    die "catalog [#{name}] not found!" unless stats.keys.include?(name)
+    
+    db = db_load(File.join @db_dir, "#{name}-tree")
+    cur_path = %w{ . } # folders of the current path
+    loop do
+      cur_size, cur_files = 0, {}
+      cur_db = cur_path.inject(db){|h, p| h[p]['files'] || h[p] } # Hash#dig
+
+      # noop if it'is a file
+      if cur_db.key?('perms') && cur_db.key?('user') && cur_db.key?('group')
+        cur_path.pop
+        next
+      end
+      
+      begin
+        tf_out     = Tempfile.open 'dialog.dcat.', '/tmp'
+        tf_params  = Tempfile.open 'dialog.dcat.', '/tmp'
+        entry_maxl = 0
+        d_title    = %Q|"#{name}🖴 :/#{cur_path[1..-1].to_a.join '/'}"|
+        d_tags = cur_db.
+          sort{|a,b| (a[1]['files'] ? 0 : 1) <=> (b[1]['files'] ? 0 : 1) }. # folders first
+          map{|name, props|
+            entry_maxl = name.size if name.size > entry_maxl
+            props['files'] ?
+              [name, %Q|"#{human_size(props['size']).rjust 7}🗀 "|] : # show folder size
+              [name, file_info(name, props)] # show file props
+          }.flatten.map{|i| %Q|"#{i.tr '"', ' '}"| }.join ' '
+        d_tag_parent = '.. "  ↑↑↑  🗁 "' if cur_path.size > 1
+        d_width  = [entry_maxl+45, d_title.size].max
+        d_width  = 75         if d_width < 75
+        d_width  = @term_w if d_width > @term_w
+        d_scroll = @term_h-8
+
+        tf_params.print %Q| --ok-label "Enter folder" --cancel-label "Quit DCat" \
+          --menu #{d_title} -1 #{d_width} #{d_scroll} \
+          #{d_tag_parent} #{d_tags} |
+        tf_params.flush
+        
+        system %Q| dialog --file #{tf_params.path} 2> #{tf_out.path} |
+        
+        entry = tf_out.read.strip
+      ensure # close and unlink temp files
+        tf_out   .close!
+        tf_params.close!
+      end
+      
+      case entry
+        when ''  ; break
+        when '..'; cur_path.pop
+        else       cur_path << entry
+      end
+    end
+    print "\e[H\e[2J" # clear terminal
+  end # browse
+  
+  def search(name:, re:)
+    re, name = name, nil if re.nil?
+    names, re = [name], Regexp.new(re)
+    names = available_dbs if name.nil?
+    pad_size = names.map(&:size).max
+    
+    names.each do |db_name|
+      db_load(File.join @db_dir, "#{db_name}-list").each_with_index do |pair, i|
+        print "#{SPINNERS[i%SPINNERS.size]}#{' '*SPINNERS.size}\r"
+        file_name, props = pair
+        next if file_name !~ re
+        puts file_info file_name, props, db_name.rjust(pad_size)
+      end
+    end
+    print "#{' '*SPINNERS.size}\r" # hide the eventual spinner
+  end # search
+  
+  def create(path:, name:)
+    die "folder [#{path}] not found" unless File.directory?(path)
+    
+    data = { list: {}, tree: {} }
+    tsv = Dir.chdir(path){ `find -type f -printf '%h/%f\t%m\t%T+\t%u\t%g\t%s\n' | pv -brtN scanning | sort` }
+    tsv.split("\n").each do |info|
+      path, perms, ts, user, group, size = info.split "\t"
+      mdate, mtime = ts.split(/[+.]/)[0..1]
+      file_props = { perms: perms, size:  size.to_i,
+                     mdate: mdate, mtime: mtime,
+                     user:  user , group: group, }
+      
+      # update flat list for search purposes
+      data[:list][ path[2..-1] ] = file_props   # rimuovi "./" iniziale dal path
+      
+      # update tree for browsing purposes
+      items = path.split('/')
+      # https://stackoverflow.com/questions/41639364/how-to-set-dynamically-value-of-nested-key-in-ruby-hash/41640412#41640412
+      items[0...-1].inject(data[:tree]){|t, f|
+        t[f] ||= { size: 0, files: {} }
+        t[f][:size] += file_props[:size]
+        t[f][:files]
+      }[items.last] = file_props
+      
+      data[:tree]
+    end
+    
+    name = name.tr ' ', '_'
+    db_dump data[:list], File.join(@db_dir, "#{name}-list")
+    db_dump data[:tree], File.join(@db_dir, "#{name}-tree")
+    
+    puts "[#{name}] #{human_size db_size(name)} catalog created (#{human_size data[:tree]['.'][:size]} @ #{data[:list].size} files)"
+  end # create
+  
+  
+  private # ____________________________________________________________________
+  
+  
+  def db_size(name)
+    Dir.chdir(@db_dir){ File.size("#{name}-list.json.gz") + File.size("#{name}-tree.json.gz") }
+  end # db_size
+
+  def dbs_stats
+    stats = {}
+    Dir.chdir(@db_dir) do
+      Dir['*-list.json.gz'].sort.map do |f|
+        name = f.sub '-list.json.gz', ''
+        size = File.size(f) + File.size("#{name}-tree.json.gz")
+        stats[name] = { size: human_size(size).rjust(7), ctime: File.ctime(f).strftime('%F %H:%M') }
+      end
+    end
+    stats
+  end # dbs_stats
+  
+  def available_dbs
+    Dir.chdir(@db_dir){ Dir['*-list.*gz'] }.map{|f| f.sub /-list\..+$/, ''}.sort
+  end # available_dbs
+  
+  # https://www.ruby-forum.com/t/human-readable-file-sizes/116311/5
+  def human_size(n, step = 0, fmt: '%.1f')
+    return human_size(n.to_f/1024, step+1) if n > 1024
+    "#{fmt % n}#{SIZE_UNITS[step]}"
+  end # human_size
+  
+  def file_info(name, props, db_name = nil)
+    # https://www.utf8icons.com
+    info = [
+      props['perms']+'🔒 ',
+      props['mdate']+'🗓 ',
+      props['mtime'][0...5]+'🕒 ',
+      human_size(props['size']).rjust(7)+'🗋 ',
+    ]
+    info += [db_name+'🖴  '+name] if db_name
+    info.reverse! unless db_name
+    info.join
+  end # file_info
+  
+  def db_dump(data, name)
+    fname = "#{name}.json"
+    die "data folder not found!" unless File.directory?(File.dirname fname)
+    # http://ruby-doc.org/stdlib/libdoc/zlib/rdoc/Zlib/GzipWriter.html
+    Zlib::GzipWriter.open("#{fname}.gz") do |gz|
+      gz.mtime, gz.orig_name = Time.now, File.basename(name)
+      gz.write data.to_json
+      gz.close
+    end
+  end # db_dump
+  
+  def db_load(name)
+    fname = "#{name}.json.gz"
+    die "catalog not found!" unless File.exist?(fname)
+    # https://ruby-doc.org/stdlib/libdoc/zlib/rdoc/Zlib/GzipReader.html
+    JSON.parse Zlib::GzipReader.open(fname){|gz| gz.read }
+  end # db_load
+  
+  def die(msg, exit_code = 0)
+    puts msg
+    exit exit_code
+  end
+end # class DCat
+
+DCat.new(ARGV).run
