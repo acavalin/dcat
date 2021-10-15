@@ -2,6 +2,12 @@
 
 A command line catalog tool for your offline data.
 
+After trying some other tools ([CDcat](http://cdcat.sourceforge.net), [VVV](http://vvvapp.sourceforge.net), [Basenji](https://launchpad.net/basenji), [GWhere](http://www.gwhere.org), [catcli](https://github.com/deadc0de6/catcli)) I ended up writing my own with these points in mind:
+- no GUI: usable everywhere especially in remote terminals
+- no extra libraries needed, only mature core tools
+- data stored in a compressed and open format (gzipped json)
+- easy way to browse a catalog with [ncurses](https://en.wikipedia.org/wiki/Ncurses)
+
 ## With DCat you can
 
 * create a catalog (files index) for each desired removable media (CD/DVDs, hard/flash drives) or folder
