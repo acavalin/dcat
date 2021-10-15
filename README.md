@@ -20,6 +20,24 @@ A command line catalog tool for your offline data.
 | action | command |
 |--------|---------|
 | create | `dcat <i\|index>  catalog_name   path` |
+| list   | `dcat ls` |
 | search | `dcat <s\|search> [catalog_name] regexp` |
 | browse | `dcat [catalog_name]` |
-| list   | `dcat ls` |
+
+## Screenshots
+
+### create
+![create](/sshots/create.png?raw=true "create a catalog")
+
+### list
+![list](/sshots/browse-list.png?raw=true "list created catalogues")
+
+### search
+![search1](/sshots/search1.png?raw=true "search in catalogues")
+
+![search2](/sshots/search2.png?raw=true "search in catalogues")
+
+### browse
+![browse1](/sshots/browse-list.png?raw=true "browse - list of catalogues")
+
+![browse2](/sshots/browse-catalog.png?raw=true "browse a catalog")
