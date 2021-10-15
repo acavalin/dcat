@@ -10,15 +10,16 @@ A command line catalog tool for your offline data.
 
 ## Requirements
 
-* ruby interpreter: `apt install ruby`
-* linux commands find, sort, pv, dialog: `apt install findutils coreutils pv dialog`
-* set executable bits on file: `chmod 755 dcat`
+1. ruby interpreter (no additional gems required) and common linux commands (`find`, `sort`, `pv`, and `dialog`):
+   
+   `apt install ruby findutils coreutils pv dialog`
+2. set executable bits on file: `chmod 755 dcat`
 
 ## Usage
 
-`name` is the name of the catalog
-
-* create:  `dcat <i|index>  name   path`
-* search:  `dcat <s|search> [name] regexp`
-* browse:  `dcat [name]`
-* list  :  `dcat ls`
+| action | command |
+|--------|---------|
+| create | `dcat <i\|index>  catalog_name   path` |
+| search | `dcat <s\|search> [catalog_name] regexp` |
+| browse | `dcat [catalog_name]` |
+| list   | `dcat ls` |
