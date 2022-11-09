@@ -36,7 +36,7 @@ After trying some other tools ([CDcat](http://cdcat.sourceforge.net), [VVV](http
 ![create](/sshots/create.png?raw=true "create a catalog")
 
 ### list
-![list](/sshots/browse-list.png?raw=true "list created catalogues")
+![list](/sshots/list.png?raw=true "list created catalogues")
 
 ### search
 ![search1](/sshots/search1.png?raw=true "search in catalogues")
