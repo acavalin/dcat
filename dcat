@@ -36,8 +36,8 @@ class DCat
   def run
     die help_text if @args.include? '-h'
     return show_dbs if @args[0] == 'ls'
-    return create name: @args[1], path: @args[2] if %w{ i index  }.include?(@args[0])
-    return search name: @args[1], re:   @args[2] if %w{ s search }.include?(@args[0])
+    return create name: @args[1], src_path: @args[2] if %w{ i index  }.include?(@args[0])
+    return search name: @args[1], re:       @args[2] if %w{ s search }.include?(@args[0])
     return browse name: @args[0]
   end # run
   
@@ -135,11 +135,11 @@ class DCat
     print "#{' '*SPINNERS.size}\r" # hide the eventual spinner
   end # search
   
-  def create(path:, name:)
-    die "folder [#{path}] not found" unless File.directory?(path)
+  def create(src_path:, name:)
+    die "folder [#{src_path}] not found" unless File.directory?(src_path)
     
     data = { list: {}, tree: {} }
-    tsv = Dir.chdir(path){ `find -type f -printf '%h/%f\t%m\t%T+\t%u\t%g\t%s\n' | pv -brtN scanning | sort` }
+    tsv = Dir.chdir(src_path){ `find -type f -printf '%h/%f\t%m\t%T+\t%u\t%g\t%s\n' | pv -brtN scanning | sort` }
     tsv.split("\n").each do |info|
       path, perms, ts, user, group, size = info.split "\t"
       mdate, mtime = ts.split(/[+.]/)[0..1]
@@ -165,6 +165,7 @@ class DCat
     name = name.tr ' ', '_'
     db_dump data[:list], File.join(@db_dir, "#{name}-list")
     db_dump data[:tree], File.join(@db_dir, "#{name}-tree")
+    File.write File.join(@db_dir, "#{name}-path.txt"), src_path
     
     puts "[#{name}] #{human_size db_size(name)} catalog created (#{human_size data[:tree]['.'][:size]} @ #{data[:list].size} files)"
   end # create
